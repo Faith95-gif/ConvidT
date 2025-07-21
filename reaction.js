@@ -133,6 +133,17 @@ class ReactionManager {
         color: white !important;
       }
 
+      .rm-raise-hand-btn:disabled {
+        opacity: 0.5 !important;
+        cursor: not-allowed !important;
+        pointer-events: none !important;
+      }
+
+      .rm-raise-hand-btn:disabled:hover {
+        background: rgba(51, 65, 85, 0.8) !important;
+        transform: none !important;
+      }
+
       .rm-emoji-picker {
         position: fixed;
         background: rgba(30, 41, 59, 0.95);
@@ -315,6 +326,14 @@ class ReactionManager {
     if (this.isDestroyed) return;
     e.preventDefault();
     e.stopPropagation();
+    
+    // Check if button is disabled
+    const raiseHandBtn = document.getElementById(`${this.namespace}raiseHandBtn`);
+    if (raiseHandBtn && (raiseHandBtn.disabled || raiseHandBtn.style.cursor === 'not-allowed')) {
+      this.showToast('The Host disabled raising hands', 'error');
+      return;
+    }
+    
     this.toggleRaiseHand();
   }
 
@@ -377,6 +396,13 @@ class ReactionManager {
       if (!this.isDestroyed) {
         // Update UI based on new permissions
         this.updateHandRaisingButton(data.permissions.allowHandRaising);
+        
+        // Show notification about the change
+        if (data.permissions.allowHandRaising) {
+          this.showToast('Hand raising has been enabled by the host', 'info');
+        } else {
+          this.showToast('Hand raising has been disabled by the host', 'info');
+        }
       }
     });
 
@@ -524,11 +550,19 @@ class ReactionManager {
     const raiseHandBtn = document.getElementById(`${this.namespace}raiseHandBtn`);
     if (!raiseHandBtn || this.isDestroyed) return;
     
-    // Check if hand raising is allowed
+    // Check if button is disabled
+    if (raiseHandBtn.style.opacity === '0.5' || raiseHandBtn.style.cursor === 'not-allowed') {
+      this.showToast('The Host disabled raising hands', 'error');
+      return;
+    }
+    
+    // Check if hand raising is allowed via socket
     if (this.socket) {
       this.socket.emit('check-hand-raising-permission', (response) => {
         if (!response.allowed) {
           this.showToast('The Host disabled raising hands', 'error');
+          // Also update the button state
+          this.updateHandRaisingButton(false);
           return;
         }
         
@@ -542,6 +576,12 @@ class ReactionManager {
   }
 
   proceedWithRaiseHand(raiseHandBtn) {
+    // Double check if button is still enabled
+    if (raiseHandBtn.style.opacity === '0.5' || raiseHandBtn.style.cursor === 'not-allowed') {
+      this.showToast('The Host disabled raising hands', 'error');
+      return;
+    }
+    
     raiseHandBtn.setAttribute('data-active', 'true');
     raiseHandBtn.classList.add('rm-active');
 
@@ -590,6 +630,7 @@ class ReactionManager {
       raiseHandBtn.style.opacity = '0.5';
       raiseHandBtn.style.cursor = 'not-allowed';
       raiseHandBtn.title = 'Hand raising is disabled by the host';
+      raiseHandBtn.disabled = true;
       
       // If hand is currently raised, lower it
       if (raiseHandBtn.getAttribute('data-active') === 'true') {
@@ -599,6 +640,7 @@ class ReactionManager {
       raiseHandBtn.style.opacity = '1';
       raiseHandBtn.style.cursor = 'pointer';
       raiseHandBtn.title = 'Raise Hand';
+      raiseHandBtn.disabled = false;
     }
   }
 
