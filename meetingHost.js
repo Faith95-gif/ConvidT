@@ -1,4 +1,5 @@
-class WebRTCManager {
+
+      class WebRTCManager {
         constructor(socket) {
           this.socket = socket;
           this.localStream = null;
@@ -8,7 +9,6 @@ class WebRTCManager {
           this.isScreenSharing = false;
           this.audioContext = null;
           this.isReady = false;
-          this.originalMicrophoneTrack = null;
           
           this.configuration = {
             iceServers: [
@@ -59,9 +59,6 @@ class WebRTCManager {
                 autoGainControl: true
               }
             });
-            
-            // Store original microphone track
-            this.originalMicrophoneTrack = this.localStream.getAudioTracks()[0];
             
             // Start audio level monitoring
             this.startAudioLevelMonitoring();
@@ -312,92 +309,22 @@ class WebRTCManager {
 
         async startScreenShare() {
           try {
-            console.log('Starting screen share with audio...');
-            
-            // Request screen share with enhanced audio options
             this.screenStream = await navigator.mediaDevices.getDisplayMedia({
-              video: { 
-                cursor: 'always',
-                displaySurface: 'monitor',
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
-                frameRate: { ideal: 30 }
-              },
-              audio: {
-                echoCancellation: false,
-                noiseSuppression: false,
-                autoGainControl: false,
-                suppressLocalAudioPlayback: false,
-                sampleRate: 48000,
-                channelCount: 2
-              }
+              video: { cursor: 'always' },
+              audio: true
             });
 
-            console.log('Screen stream obtained:', this.screenStream);
-            console.log('Video tracks:', this.screenStream.getVideoTracks().length);
-            console.log('Audio tracks:', this.screenStream.getAudioTracks().length);
-
-            // Get tracks from screen stream
-            const screenVideoTrack = this.screenStream.getVideoTracks()[0];
-            const screenAudioTracks = this.screenStream.getAudioTracks();
-
             // Replace video track in all peer connections
+            const videoTrack = this.screenStream.getVideoTracks()[0];
+            
             for (const [socketId, peerConnection] of this.peerConnections) {
-              const videoSender = peerConnection.getSenders().find(s => 
+              const sender = peerConnection.getSenders().find(s => 
                 s.track && s.track.kind === 'video'
               );
               
-              if (videoSender && screenVideoTrack) {
-                console.log(`Replacing video track for peer ${socketId}`);
-                await videoSender.replaceTrack(screenVideoTrack);
+              if (sender) {
+                await sender.replaceTrack(videoTrack);
               }
-            }
-
-            // Handle screen share audio
-            if (screenAudioTracks.length > 0) {
-              console.log('System audio detected, replacing audio tracks...');
-              
-              // Create a new MediaStream that combines microphone and system audio
-              const combinedAudioStream = await this.createCombinedAudioStream(screenAudioTracks[0]);
-              
-              if (combinedAudioStream) {
-                const combinedAudioTrack = combinedAudioStream.getAudioTracks()[0];
-                
-                // Replace audio track in all peer connections
-                for (const [socketId, peerConnection] of this.peerConnections) {
-                  const audioSender = peerConnection.getSenders().find(s => 
-                    s.track && s.track.kind === 'audio'
-                  );
-                  
-                  if (audioSender && combinedAudioTrack) {
-                    console.log(`Replacing audio track for peer ${socketId} with combined audio`);
-                    await audioSender.replaceTrack(combinedAudioTrack);
-                  } else if (!audioSender && combinedAudioTrack) {
-                    console.log(`Adding combined audio track for peer ${socketId}`);
-                    peerConnection.addTrack(combinedAudioTrack, combinedAudioStream);
-                  }
-                }
-              } else {
-                // Fallback: just use system audio
-                const systemAudioTrack = screenAudioTracks[0];
-                
-                for (const [socketId, peerConnection] of this.peerConnections) {
-                  const audioSender = peerConnection.getSenders().find(s => 
-                    s.track && s.track.kind === 'audio'
-                  );
-                  
-                  if (audioSender) {
-                    console.log(`Replacing audio track for peer ${socketId} with system audio only`);
-                    await audioSender.replaceTrack(systemAudioTrack);
-                  } else {
-                    console.log(`Adding system audio track for peer ${socketId}`);
-                    peerConnection.addTrack(systemAudioTrack, this.screenStream);
-                  }
-                }
-              }
-            } else {
-              console.log('No system audio available for screen share');
-              // Keep using microphone audio
             }
 
             // Update local video to show screen share
@@ -415,25 +342,15 @@ class WebRTCManager {
                 label.className = 'video-label';
                 localWrapper.appendChild(label);
               }
-              label.innerHTML = '<i class="fas fa-desktop"></i> Screen Share' + 
-                (screenAudioTracks.length > 0 ? ' (with audio)' : '');
+              label.innerHTML = '<i class="fas fa-desktop"></i> Screen Share';
             }
 
             // Handle screen share end
-            screenVideoTrack.onended = () => {
-              console.log('Screen share ended');
+            videoTrack.onended = () => {
               this.stopScreenShare();
             };
 
-            // Handle audio track end if present
-            if (screenAudioTracks.length > 0) {
-              screenAudioTracks[0].onended = () => {
-                console.log('Screen share audio ended');
-              };
-            }
-
             this.isScreenSharing = true;
-            console.log('Screen share started successfully');
             
           } catch (error) {
             console.error('Error starting screen share:', error);
@@ -441,97 +358,23 @@ class WebRTCManager {
           }
         }
 
-        async createCombinedAudioStream(systemAudioTrack) {
-          try {
-            if (!this.audioContext) {
-              this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            }
-
-            // Resume audio context if suspended
-            if (this.audioContext.state === 'suspended') {
-              await this.audioContext.resume();
-            }
-
-            // Create audio sources
-            const systemAudioSource = this.audioContext.createMediaStreamSource(
-              new MediaStream([systemAudioTrack])
-            );
-            
-            let microphoneSource = null;
-            if (this.originalMicrophoneTrack && this.originalMicrophoneTrack.enabled) {
-              microphoneSource = this.audioContext.createMediaStreamSource(
-                new MediaStream([this.originalMicrophoneTrack])
-              );
-            }
-
-            // Create gain nodes for volume control
-            const systemGain = this.audioContext.createGain();
-            const micGain = this.audioContext.createGain();
-            const outputGain = this.audioContext.createGain();
-
-            // Set gain levels
-            systemGain.gain.value = 1.0; // Full system audio
-            micGain.gain.value = 0.7;    // Slightly reduced microphone
-            outputGain.gain.value = 1.0;
-
-            // Create destination for combined audio
-            const destination = this.audioContext.createMediaStreamDestination();
-
-            // Connect audio graph
-            systemAudioSource.connect(systemGain);
-            systemGain.connect(outputGain);
-
-            if (microphoneSource) {
-              microphoneSource.connect(micGain);
-              micGain.connect(outputGain);
-            }
-
-            outputGain.connect(destination);
-
-            console.log('Combined audio stream created successfully');
-            return destination.stream;
-
-          } catch (error) {
-            console.error('Error creating combined audio stream:', error);
-            return null;
-          }
-        }
-
         async stopScreenShare() {
-          console.log('Stopping screen share...');
-          
           if (this.screenStream) {
-            this.screenStream.getTracks().forEach(track => {
-              console.log(`Stopping track: ${track.kind}`);
-              track.stop();
-            });
+            this.screenStream.getTracks().forEach(track => track.stop());
             this.screenStream = null;
           }
 
-          // Replace back to camera video and microphone audio
+          // Replace back to camera video
           if (this.localStream) {
             const videoTrack = this.localStream.getVideoTracks()[0];
-            const audioTrack = this.originalMicrophoneTrack || this.localStream.getAudioTracks()[0];
             
             for (const [socketId, peerConnection] of this.peerConnections) {
-              // Replace video track back to camera
-              const videoSender = peerConnection.getSenders().find(s => 
+              const sender = peerConnection.getSenders().find(s => 
                 s.track && s.track.kind === 'video'
               );
               
-              if (videoSender && videoTrack) {
-                console.log(`Restoring camera video for peer ${socketId}`);
-                await videoSender.replaceTrack(videoTrack);
-              }
-
-              // Replace audio track back to microphone
-              const audioSender = peerConnection.getSenders().find(s => 
-                s.track && s.track.kind === 'audio'
-              );
-              
-              if (audioSender && audioTrack) {
-                console.log(`Restoring microphone audio for peer ${socketId}`);
-                await audioSender.replaceTrack(audioTrack);
+              if (sender) {
+                await sender.replaceTrack(videoTrack);
               }
             }
 
@@ -552,45 +395,49 @@ class WebRTCManager {
           }
 
           this.isScreenSharing = false;
-          console.log('Screen share stopped successfully');
         }
       }
 
-      class ParticipantMeeting {
+      class HostMeeting {
         constructor() {
           this.socket = io();
           this.meetingId = window.location.pathname.split('/').pop();
           this.userName = '';
-          this.isHost = false;
-          this.isCoHost = false;
+          this.isHost = true;
           this.participants = new Map();
           this.currentView = 'sidebar';
           this.spotlightedParticipant = null;
-          this.pinnedParticipant = null;
           this.webrtc = new WebRTCManager(this.socket);
           this.participantsPanelOpen = false;
           this.searchTerm = '';
           this.reactionManager = null;
+          this.currentGridSet = 0;
+          this.maxParticipantsPerSet = 15;
+          this.currentSidebarSet = 0;
+          this.maxSidebarParticipants = 5;
           
-          // Grid pagination properties
-          this.currentSet = 0;
-          this.videosPerSet = 15;
-          this.totalSets = 0;
+          this.meetingPermissions = {
+            chatEnabled: true,
+            fileSharing: true,
+            emojiReactions: true
+          };
           
-          this.init().then(() => {
-            // Store global references after initialization
-            window.hostMeetingInstance = this;
-            window.myName = this.userName;
-            console.log('Host meeting initialized. Host name:', window.myName);
-          });
+        this.init().then(() => {
+  // Store global references after initialization
+  window.hostMeetingInstance = this;
+  window.myName = this.userName;
+  console.log('Host meeting initialized. Host name:', window.myName);
+});
         }
 
         async init() {
           await this.getUserName();
           this.setupSocketListeners();
           this.setupEventListeners();
+          this.setupPermissionControls();
           this.updateTime();
           this.joinMeeting();
+          this.showMeetingInfo();
           
           // Initialize WebRTC and show local video immediately
           const initialized = await this.webrtc.initialize();
@@ -611,14 +458,15 @@ class WebRTCManager {
           this.participants.set(this.socket.id, {
             socketId: this.socket.id,
             name: this.userName,
-            isHost: false,
+            isHost: true,
             isCoHost: false,
             isMuted: false,
             isCameraOff: false,
-            isSpotlighted: false,
+            isSpotlighted: true, // Host is spotlighted by default
             isScreenSharing: false,
             handRaised: false
           });
+          this.spotlightedParticipant = this.socket.id;
           this.renderParticipants();
           this.renderParticipantsList();
         }
@@ -640,9 +488,12 @@ class WebRTCManager {
 
         setupSocketListeners() {
           this.socket.on('joined-meeting', (data) => {
-            console.log('Joined meeting as participant:', data);
+            console.log('Joined meeting as host:', data);
             this.updateParticipants(data.participants);
-            this.spotlightedParticipant = data.spotlightedParticipant;
+            if (data.permissions) {
+              this.meetingPermissions = data.permissions;
+              this.updatePermissionControls();
+            }
             this.updateMeetingTitle();
             this.updateRaisedHands(data.raisedHands);
           });
@@ -675,46 +526,23 @@ class WebRTCManager {
             this.updateParticipants(data.participants);
           });
 
-          this.socket.on('participant-pinned', (data) => {
-            console.log('Participant pinned:', data);
-            this.handlePinChange(data.pinnedParticipant);
-          });
-
-          this.socket.on('force-mute', (data) => {
-            console.log('Force muted:', data);
-            this.handleForceMute(data.isMuted);
-          });
-
-          this.socket.on('made-cohost', () => {
-            console.log('Made co-host');
-            this.isCoHost = true;
-            this.showToast('You are now a co-host!');
-            this.renderParticipants();
-            this.renderParticipantsList();
-          });
-
-          this.socket.on('kicked-from-meeting', () => {
-            console.log('Kicked from meeting');
-            document.getElementById('kickedModal').style.display = 'flex';
-          });
-
-          this.socket.on('meeting-ended', () => {
-            console.log('Meeting ended');
-            document.getElementById('meetingEndedModal').style.display = 'flex';
-          });
-
           this.socket.on('participant-muted', (data) => {
             console.log('Participant muted:', data);
             this.updateParticipantAudio(data.targetSocketId, data.isMuted);
             this.updateParticipants(data.participants);
           });
 
-          this.socket.on('meeting-error', (data) => {
-            console.error('Meeting error:', data);
-            this.showToast(data.message, 'error');
-            setTimeout(() => {
-              window.location.href = '/dashboard';
-            }, 3000);
+          this.socket.on('cohost-assigned', (data) => {
+            console.log('Co-host assigned:', data);
+            this.updateParticipants(data.participants);
+            this.showToast('Co-host assigned successfully');
+          });
+
+          this.socket.on('participant-kicked', (data) => {
+            console.log('Participant kicked:', data);
+            this.removeParticipantVideo(data.targetSocketId);
+            this.updateParticipants(data.participants);
+            this.showToast('Participant removed from meeting');
           });
 
           this.socket.on('action-error', (data) => {
@@ -737,26 +565,12 @@ class WebRTCManager {
             }
           });
 
+          // Permission update confirmation
           this.socket.on('meeting-permissions-updated', (data) => {
-            this.handlePermissionsUpdated(data);
+            console.log('Meeting permissions updated:', data);
+            this.meetingPermissions = data.permissions;
+            this.showToast(`Meeting permissions updated by ${data.changedBy}`);
           });
-        }
-
-        handlePermissionsUpdated(data) {
-          const { permissions, changedBy } = data;
-          
-          // Handle hand raising permission changes
-          if (permissions.allowHandRaising !== undefined) {
-            // Update reaction manager if it exists
-            if (this.reactionManager) {
-              // The reaction manager will handle the permission check internally
-              console.log('Hand raising permission updated:', permissions.allowHandRaising);
-            }
-          }
-          
-          if (changedBy) {
-            this.showToast(`Meeting permissions updated by ${changedBy}`, 'info');
-          }
         }
 
         setupEventListeners() {
@@ -780,6 +594,24 @@ class WebRTCManager {
             this.toggleView();
           });
 
+          // Grid navigation
+          document.getElementById('prevSetBtn').addEventListener('click', () => {
+            this.navigateGridSet(-1);
+          });
+
+          document.getElementById('nextSetBtn').addEventListener('click', () => {
+            this.navigateGridSet(1);
+          });
+
+          // Sidebar navigation
+          document.getElementById('prevSidebarBtn').addEventListener('click', () => {
+            this.navigateSidebarSet(-1);
+          });
+
+          document.getElementById('nextSidebarBtn').addEventListener('click', () => {
+            this.navigateSidebarSet(1);
+          });
+
           // Mic toggle
           document.getElementById('micBtn').addEventListener('click', (e) => {
             this.toggleMic(e.currentTarget);
@@ -795,9 +627,27 @@ class WebRTCManager {
             this.toggleScreenShare(e.currentTarget);
           });
 
-          // Leave call
-          document.getElementById('leaveCallBtn').addEventListener('click', () => {
-            this.leaveMeeting();
+          // End call
+          document.getElementById('endCallBtn').addEventListener('click', () => {
+            this.endMeeting();
+          });
+
+          // Meeting info modal
+          document.getElementById('meetingTitle').addEventListener('click', () => {
+            this.showMeetingInfo();
+          });
+
+          document.getElementById('closeMeetingInfo').addEventListener('click', () => {
+            this.hideMeetingInfo();
+          });
+
+          document.getElementById('copyMeetingId').addEventListener('click', () => {
+            this.copyToClipboard(this.meetingId);
+          });
+
+          document.getElementById('copyJoinUrl').addEventListener('click', () => {
+            const joinUrl = `${window.location.origin}/join/${this.meetingId}`;
+            this.copyToClipboard(joinUrl);
           });
 
           // Close participants panel when clicking outside
@@ -808,6 +658,72 @@ class WebRTCManager {
               this.closeParticipantsPanel();
             }
           });
+        }
+
+        setupPermissionControls() {
+          // Chat enable/disable toggle
+          const chatToggle = document.querySelector('#chat input[type="checkbox"]:first-of-type');
+          if (chatToggle) {
+            chatToggle.addEventListener('change', (e) => {
+              this.updatePermission('chatEnabled', e.target.checked);
+            });
+          }
+
+          // File sharing toggle
+          const fileToggle = document.querySelector('#chat .setting-item:nth-child(3) input[type="checkbox"]');
+          if (fileToggle) {
+            fileToggle.addEventListener('change', (e) => {
+              this.updatePermission('fileSharing', e.target.checked);
+            });
+          }
+
+          // Emoji reactions toggle
+          const emojiToggle = document.querySelector('#chat .setting-item:nth-child(4) input[type="checkbox"]');
+          if (emojiToggle) {
+            emojiToggle.addEventListener('change', (e) => {
+              this.updatePermission('emojiReactions', e.target.checked);
+            });
+          }
+        }
+
+        updatePermission(permissionType, enabled) {
+          this.meetingPermissions[permissionType] = enabled;
+          
+          // Send permission update to server
+          this.socket.emit('update-meeting-permissions', {
+            permissions: this.meetingPermissions
+          });
+
+          // Show feedback to host
+          const permissionNames = {
+            chatEnabled: 'Chat',
+            fileSharing: 'File Sharing',
+            emojiReactions: 'Emoji Reactions'
+          };
+          
+          this.showToast(
+            `${permissionNames[permissionType]} ${enabled ? 'enabled' : 'disabled'} for all participants`
+          );
+        }
+
+        updatePermissionControls() {
+          // Update chat toggle
+          const chatToggle = document.querySelector('#chat input[type="checkbox"]:first-of-type');
+          if (chatToggle) {
+            chatToggle.checked = this.meetingPermissions.chatEnabled;
+          }
+
+          // Update file sharing toggle
+          const fileToggle = document.querySelector('#chat .setting-item:nth-child(3) input[type="checkbox"]');
+          if (fileToggle) {
+            fileToggle.checked = this.meetingPermissions.fileSharing;
+          }
+
+          // Update emoji reactions toggle
+          const emojiToggle = document.querySelector('#chat .setting-item:nth-child(4) input[type="checkbox"]');
+          if (emojiToggle) {
+            emojiToggle.checked = this.meetingPermissions.emojiReactions;
+          }
         }
 
         updateRaisedHands(raisedHands) {
@@ -828,13 +744,22 @@ class WebRTCManager {
           }
         }
 
+        
         openParticipantsPanel() {
           this.participantsPanelOpen = true;
           document.getElementById('participantsPanel').classList.add('open');
           document.getElementById('videoContainer').classList.add('participants-open');
           this.renderParticipantsList();
         }
+        openChatsPanel(){
+          this.participantsPanelOpen = true;
+          document.getElementById('videoContainer').classList.add('participants-open');
+        }
+        closeChatsPanel(){
+          this.participantsPanelOpen = false;
+          document.getElementById('videoContainer').classList.remove('participants-open');
 
+        }
         closeParticipantsPanel() {
           this.participantsPanelOpen = false;
           document.getElementById('participantsPanel').classList.remove('open');
@@ -898,7 +823,6 @@ class WebRTCManager {
               <div class="participant-role">
                 <span class="role-badge ${roleClass}">${roleText}</span>
                 ${participant.isSpotlighted ? '<i class="fas fa-star" style="color: #fbbf24; margin-left: 4px;"></i>' : ''}
-                ${this.pinnedParticipant === participant.socketId ? '<i class="fas fa-thumbtack" style="color: #10b981; margin-left: 4px;"></i>' : ''}
               </div>
             </div>
             <div class="participant-status">
@@ -944,31 +868,28 @@ class WebRTCManager {
         getParticipantDropdownOptions(participant) {
           let options = [];
           
-          // Pin option (available to all participants)
-          if (this.pinnedParticipant === participant.socketId) {
-            options.push('<button data-action="unpin"><i class="fas fa-thumbtack"></i> Unpin</button>');
+          if (participant.isSpotlighted) {
+            options.push('<button data-action="remove-spotlight"><i class="fas fa-star-half-alt"></i> Remove Spotlight</button>');
           } else {
-            options.push('<button data-action="pin"><i class="fas fa-thumbtack"></i> Pin</button>');
+            options.push('<button data-action="spotlight"><i class="fas fa-star"></i> Spotlight</button>');
           }
           
-          // Co-host and host actions
-          if (this.isCoHost && !participant.isHost) {
-            if (participant.isSpotlighted) {
-              options.push('<button data-action="remove-spotlight"><i class="fas fa-star-half-alt"></i> Remove Spotlight</button>');
-            } else {
-              options.push('<button data-action="spotlight"><i class="fas fa-star"></i> Spotlight</button>');
-            }
-            
+          if (!participant.isHost) {
             options.push(`<button data-action="mute"><i class="fas fa-microphone-slash"></i> ${participant.isMuted ? 'Unmute' : 'Mute'}</button>`);
+            
+            if (!participant.isCoHost) {
+              options.push('<button data-action="make-cohost"><i class="fas fa-user-shield"></i> Make Co-Host</button>');
+              options.push('<button data-action="kick" class="danger"><i class="fas fa-user-times"></i> Remove</button>');
+            }
           }
           
           return options.join('');
         }
 
         joinMeeting() {
-          this.socket.emit('join-meeting', {
+          this.socket.emit('join-as-host', {
             meetingId: this.meetingId,
-            participantName: this.userName
+            hostName: this.userName
           });
         }
 
@@ -979,9 +900,6 @@ class WebRTCManager {
           this.participants.clear();
           participants.forEach(p => {
             this.participants.set(p.socketId, p);
-            if (p.socketId === this.socket.id) {
-              this.isCoHost = p.isCoHost;
-            }
           });
 
           // Ensure local participant is always present
@@ -996,94 +914,6 @@ class WebRTCManager {
           }
         }
 
-        calculateGridPagination() {
-          const totalParticipants = this.participants.size;
-          this.totalSets = Math.ceil(totalParticipants / this.videosPerSet);
-          
-          // Ensure current set is within bounds
-          if (this.currentSet >= this.totalSets) {
-            this.currentSet = Math.max(0, this.totalSets - 1);
-          }
-        }
-
-        getCurrentSetParticipants() {
-          const participantArray = Array.from(this.participants.values());
-          const startIndex = this.currentSet * this.videosPerSet;
-          const endIndex = startIndex + this.videosPerSet;
-          return participantArray.slice(startIndex, endIndex);
-        }
-
-        updateGridSizeClass() {
-          const videoContainer = document.getElementById('videoContainer');
-          const participantCount = this.participants.size;
-          
-          // Remove all existing size classes
-          videoContainer.classList.remove(
-            'participants-2', 'participants-3', 'participants-4', 
-            'participants-5', 'participants-6'
-          );
-          
-          // Add appropriate size class
-          if (participantCount === 2) {
-            videoContainer.classList.add('participants-2');
-          } else if (participantCount === 3) {
-            videoContainer.classList.add('participants-3');
-          } else if (participantCount === 4) {
-            videoContainer.classList.add('participants-4');
-          } else if (participantCount === 5) {
-            videoContainer.classList.add('participants-5');
-          } else if (participantCount === 6) {
-            videoContainer.classList.add('participants-6');
-          }
-          // For 7+ participants, no special class is added (uses default grid)
-        }
-
-        createGridNavigation() {
-          const videoContainer = document.getElementById('videoContainer');
-          let navigation = videoContainer.querySelector('.grid-navigation');
-          
-          if (!navigation) {
-            navigation = document.createElement('div');
-            navigation.className = 'grid-navigation';
-            videoContainer.appendChild(navigation);
-          }
-          
-          const startParticipant = this.currentSet * this.videosPerSet + 1;
-          const endParticipant = Math.min((this.currentSet + 1) * this.videosPerSet, this.participants.size);
-          
-          navigation.innerHTML = `
-            <button class="grid-nav-btn" id="prevSetBtn" ${this.currentSet === 0 ? 'disabled' : ''}>
-              <i class="fas fa-chevron-left"></i>
-              Previous
-            </button>
-            <div class="grid-nav-info">
-              ${startParticipant}-${endParticipant} of ${this.participants.size}
-            </div>
-            <button class="grid-nav-btn" id="nextSetBtn" ${this.currentSet >= this.totalSets - 1 ? 'disabled' : ''}>
-              Next
-              <i class="fas fa-chevron-right"></i>
-            </button>
-          `;
-          
-          // Bind navigation events
-          const prevBtn = navigation.querySelector('#prevSetBtn');
-          const nextBtn = navigation.querySelector('#nextSetBtn');
-          
-          prevBtn.addEventListener('click', () => {
-            if (this.currentSet > 0) {
-              this.currentSet--;
-              this.renderParticipants();
-            }
-          });
-          
-          nextBtn.addEventListener('click', () => {
-            if (this.currentSet < this.totalSets - 1) {
-              this.currentSet++;
-              this.renderParticipants();
-            }
-          });
-        }
-
         renderParticipants() {
           const mainVideoSection = document.getElementById('mainVideoSection');
           const secondaryVideosSection = document.getElementById('secondaryVideosSection');
@@ -1092,50 +922,226 @@ class WebRTCManager {
           mainVideoSection.innerHTML = '';
           secondaryVideosSection.innerHTML = '';
 
+          const participantArray = Array.from(this.participants.values());
+          
           if (this.currentView === 'grid') {
-            this.calculateGridPagination();
-            this.updateGridSizeClass();
+            // Calculate which participants to show in current set
+            const startIndex = this.currentGridSet * this.maxParticipantsPerSet;
+            const endIndex = Math.min(startIndex + this.maxParticipantsPerSet, participantArray.length);
+            const currentSetParticipants = participantArray.slice(startIndex, endIndex);
             
-            // Get participants for current set
-            const currentSetParticipants = this.getCurrentSetParticipants();
+            this.renderGridLayout(currentSetParticipants, secondaryVideosSection);
             
-            currentSetParticipants.forEach(participant => {
-              const videoWrapper = this.createVideoWrapper(participant);
-              secondaryVideosSection.appendChild(videoWrapper);
-            });
-            
-            // Create navigation if we have multiple sets
-            if (this.totalSets > 1) {
-              this.createGridNavigation();
-            }
+            this.updateGridNavigation();
           } else {
-            // Sidebar view - show all participants
-            const participantArray = Array.from(this.participants.values());
+            // Sidebar view logic
+            const sidebarParticipants = participantArray.filter(p => !p.isSpotlighted || this.currentView !== 'sidebar');
             
-            participantArray.forEach(participant => {
+            // Calculate which participants to show in current sidebar set
+            const startIndex = this.currentSidebarSet * this.maxSidebarParticipants;
+            const endIndex = Math.min(startIndex + this.maxSidebarParticipants, sidebarParticipants.length);
+            const currentSetSidebarParticipants = sidebarParticipants.slice(startIndex, endIndex);
+            
+            participantArray.forEach((participant, index) => {
               const videoWrapper = this.createVideoWrapper(participant);
               
-              // Check if this participant should be in main view
-              const shouldBeMain = (this.spotlightedParticipant === participant.socketId || 
-                                   this.pinnedParticipant === participant.socketId);
-              
-              if (shouldBeMain) {
+              if (participant.isSpotlighted && this.currentView === 'sidebar') {
                 videoWrapper.classList.add('main-video');
                 videoWrapper.setAttribute('data-main-video', 'true');
                 mainVideoSection.appendChild(videoWrapper);
-              } else {
+              } else if (currentSetSidebarParticipants.includes(participant)) {
                 secondaryVideosSection.appendChild(videoWrapper);
               }
             });
+            
+            this.updateSidebarNavigation();
           }
         }
 
+        renderGridLayout(participants, container) {
+          const participantCount = participants.length;
+          
+          // Custom layouts for specific participant counts
+          if (participantCount === 12 || participantCount === 13 || participantCount === 14 || participantCount === 11 || participantCount === 2 || participantCount === 7 || participantCount === 8 || participantCount === 9 || (participantCount >= 3 && participantCount <= 6)) {
+            container.className = 'secondary-videos-section custom-layout';
+            container.classList.add(`participants-${participantCount}`);
+            this.renderCustomGridLayout(participants, container, participantCount);
+          } else {
+            // Standard grid layout for 1-2 or 8+ participants
+            container.className = 'secondary-videos-section standard-grid';
+            this.renderStandardGridLayout(participants, container, participantCount);
+          }
+        }
+
+        renderCustomGridLayout(participants, container, count) {
+          let rows = [];
+          
+          switch (count) {
+            case 2:
+              // 2 participants side by side, filling the screen
+              participants.forEach(participant => {
+                const videoWrapper = this.createVideoWrapper(participant);
+                container.appendChild(videoWrapper);
+              });
+              return; // Exit early for 2 participants
+              
+            case 3:
+              // 2 in first row, 1 in second row
+              rows = [
+                participants.slice(0, 2),
+                participants.slice(2, 3)
+              ];
+              break;
+            case 4:
+              // 2 in first row, 2 in second row
+              rows = [
+                participants.slice(0, 2),
+                participants.slice(2, 4)
+              ];
+              break;
+            case 5:
+              // 2 in first row, 2 in second row, 1 in third row
+             rows = [
+  participants.slice(0, 3),
+  participants.slice(3, 5)
+];
+
+              break;
+            case 6:
+              // 2 in each of the 3 rows
+             rows = [
+                participants.slice(0, 3),
+                participants.slice(3, 6)
+                    ];
+
+              break;
+            case 7:
+              // 3 in first row, 3 in second row, 1 in third row (centered)
+              rows = [
+                participants.slice(0, 3),
+                participants.slice(3, 6),
+                participants.slice(6, 7)
+              ];
+              break;
+              
+            case 8:
+              // 4 in first row, 4 in second row
+              rows = [
+                participants.slice(0, 4),
+                participants.slice(4, 8)
+              ];
+              break;
+              
+            case 9:
+              // 3 in each of the 3 rows
+              rows = [
+                participants.slice(0, 3),
+                participants.slice(3, 6),
+                participants.slice(6, 9)
+              ];
+              break;
+            case 11:
+              rows = [
+            participants.slice(0, 4),
+            participants.slice(4, 8),
+            participants.slice(8, 11)
+              ];
+              break;
+ case 12:
+             rows = [
+  participants.slice(0, 4),
+  participants.slice(4, 8),
+  participants.slice(8, 12)
+];
+
+              break;
+               case 12:
+             rows = [
+  participants.slice(0, 4),
+  participants.slice(4, 8),
+  participants.slice(8, 12)
+];
+
+              break;
+          case 13:
+              // 4 in first row, 4 in second row, 3 in third row
+            rows = [
+  participants.slice(0, 5),
+  participants.slice(5, 10),
+  participants.slice(10, 13)
+];
+
+
+              break;
+            case 14:
+              rows = [
+  participants.slice(0, 5),
+  participants.slice(5, 10),
+  participants.slice(10, 14)
+];
+          break;
+          
+          }
+          
+          rows.forEach(rowParticipants => {
+            const rowDiv = document.createElement('div');
+            rowDiv.className = 'grid-row';
+            
+            rowParticipants.forEach(participant => {
+              const videoWrapper = this.createVideoWrapper(participant);
+              rowDiv.appendChild(videoWrapper);
+            });
+            
+            container.appendChild(rowDiv);
+          });
+        }
+
+        renderStandardGridLayout(participants, container, count) {
+          // Adjust grid columns based on participant count
+          let columns = 5;
+          let maxWidth = '280px';
+          
+          if (count === 1) {
+            columns = 1;
+            maxWidth = '400px';
+          } else if (count === 2) {
+            columns = 2;
+            maxWidth = '350px';
+          } else if (count <= 5) {
+            columns = count;
+            maxWidth = '320px';
+          } 
+          
+          
+          else if (count <= 10) {
+            columns = 5;
+            maxWidth = '280px';
+          } else if (count <= 15) {
+            columns = 5;
+            maxWidth = '250px';
+          } else if (count <= 20) {
+            columns = 5;
+            maxWidth = '220px';
+          } else {
+            columns = 5;
+            maxWidth = '200px';
+          }
+          
+          container.style.gridTemplateColumns = `repeat(${columns}, minmax(180px, ${maxWidth}))`;
+          container.style.gap = count > 20 ? '12px' : '16px';
+          
+          participants.forEach(participant => {
+            const videoWrapper = this.createVideoWrapper(participant);
+            container.appendChild(videoWrapper);
+          });
+        }
+          
         createVideoWrapper(participant) {
           const wrapper = document.createElement('div');
           wrapper.className = 'video-wrapper';
           wrapper.dataset.socketId = participant.socketId;
           
-          if (participant.isSpotlighted || this.pinnedParticipant === participant.socketId) {
+          if (participant.isSpotlighted) {
             wrapper.setAttribute('data-main-video', 'true');
           }
 
@@ -1149,9 +1155,8 @@ class WebRTCManager {
                 ${dropdownOptions}
               </div>
             </div>
-            <div class="participant-name">${participant.name}${participant.isHost ? ' (Host)' : ''}${participant.isCoHost ? ' (Co-Host)'  : ''}</div>
+            <div class="participant-name">${participant.name}${participant.isHost ? ' (Host)' : ''}${participant.isCoHost ? ' (Co-Host)' : ''}</div>
             ${participant.isSpotlighted ? '<div class="spotlight-badge"><i class="fas fa-star"></i></div>' : ''}
-            ${this.pinnedParticipant === participant.socketId ? '<div class="pin-badge"><i class="fas fa-thumbtack"></i></div>' : ''}
             ${participant.isMuted ? '<div class="audio-indicator"><i class="fas fa-microphone-slash"></i></div>' : ''}
           `;
 
@@ -1184,31 +1189,30 @@ class WebRTCManager {
         getDropdownOptions(participant) {
           let options = [];
           
-          // Pin option (available to all participants)
-          if (this.pinnedParticipant === participant.socketId) {
-            options.push('<button data-action="unpin">Unpin</button>');
+          if (participant.isSpotlighted) {
+            options.push('<button data-action="remove-spotlight">Remove Spotlight</button>');
           } else {
-            options.push('<button data-action="pin">Pin</button>');
+            options.push('<button data-action="spotlight">Spotlight</button>');
           }
           
-          // Co-host and host actions
-          if (this.isCoHost && !participant.isHost) {
-            if (participant.isSpotlighted) {
-              options.push('<button data-action="remove-spotlight">Remove Spotlight</button>');
-            } else {
-              options.push('<button data-action="spotlight">Spotlight</button>');
-            }
-            
+          if (!participant.isHost) {
             options.push(`<button data-action="mute">${participant.isMuted ? 'Unmute' : 'Mute'} Participant</button>`);
+            
+            if (!participant.isCoHost) {
+              options.push('<button data-action="make-cohost">Make Co-Host</button>');
+              options.push('<button data-action="kick">Remove from Meeting</button>');
+            }
           }
           
           return options.join('');
         }
 
         bindVideoWrapperEvents(wrapper, participant) {
-          // Double click to pin
+          // Double click to spotlight
           wrapper.addEventListener('dblclick', () => {
-            this.pinParticipant(participant.socketId);
+            if (!participant.isSpotlighted) {
+              this.spotlightParticipant(participant.socketId);
+            }
           });
 
           // Dropdown menu actions
@@ -1224,12 +1228,6 @@ class WebRTCManager {
 
         handleParticipantAction(action, socketId) {
           switch(action) {
-            case 'pin':
-              this.pinParticipant(socketId);
-              break;
-            case 'unpin':
-              this.unpinParticipant();
-              break;
             case 'spotlight':
               this.spotlightParticipant(socketId);
               break;
@@ -1239,28 +1237,13 @@ class WebRTCManager {
             case 'mute':
               this.muteParticipant(socketId);
               break;
+            case 'make-cohost':
+              this.makeCoHost(socketId);
+              break;
+            case 'kick':
+              this.kickParticipant(socketId);
+              break;
           }
-        }
-
-        pinParticipant(socketId) {
-          this.pinnedParticipant = socketId;
-          this.socket.emit('pin-participant', { targetSocketId: socketId });
-          this.renderParticipants();
-          if (this.participantsPanelOpen) {
-            this.renderParticipantsList();
-          }
-          
-          const participant = this.participants.get(socketId);
-          this.showToast(`Pinned ${participant?.name || 'participant'}`);
-        }
-
-        unpinParticipant() {
-          this.pinnedParticipant = null;
-          this.renderParticipants();
-          if (this.participantsPanelOpen) {
-            this.renderParticipantsList();
-          }
-          this.showToast('Unpinned participant');
         }
 
         spotlightParticipant(socketId) {
@@ -1273,6 +1256,17 @@ class WebRTCManager {
 
         muteParticipant(socketId) {
           this.socket.emit('mute-participant', { targetSocketId: socketId });
+        }
+
+        makeCoHost(socketId) {
+          this.socket.emit('make-cohost', { targetSocketId: socketId });
+        }
+
+        kickParticipant(socketId) {
+          const participant = this.participants.get(socketId);
+          if (participant && confirm(`Remove ${participant.name} from the meeting?`)) {
+            this.socket.emit('kick-participant', { targetSocketId: socketId });
+          }
         }
 
         handleSpotlightChange(spotlightedSocketId) {
@@ -1289,24 +1283,6 @@ class WebRTCManager {
           if (this.participantsPanelOpen) {
             this.renderParticipantsList();
           }
-        }
-
-        handlePinChange(pinnedSocketId) {
-          this.pinnedParticipant = pinnedSocketId;
-          this.renderParticipants();
-          if (this.participantsPanelOpen) {
-            this.renderParticipantsList();
-          }
-        }
-
-        handleForceMute(isMuted) {
-          const micBtn = document.getElementById('micBtn');
-          micBtn.setAttribute('data-active', !isMuted);
-          
-          const icon = micBtn.querySelector('i');
-          icon.className = isMuted ? 'fas fa-microphone-slash' : 'fas fa-microphone';
-          
-          this.showToast(isMuted ? 'You have been muted by the host' : 'You have been unmuted by the host');
         }
 
         removeParticipantVideo(socketId) {
@@ -1341,26 +1317,91 @@ class WebRTCManager {
           
           if (this.currentView === 'sidebar') {
             this.currentView = 'grid';
-            this.currentSet = 0; // Reset to first set when switching to grid
+            this.currentGridSet = 0; // Reset to first set when switching to grid
+            this.currentSidebarSet = 0; // Reset sidebar set as well
             videoContainer.classList.remove('sidebar-view');
             videoContainer.classList.add('grid-view');
             viewToggleIcon.className = 'fas fa-columns';
             viewToggleText.textContent = 'Sidebar View';
           } else {
             this.currentView = 'sidebar';
+            this.currentSidebarSet = 0; // Reset to first set when switching to sidebar
             videoContainer.classList.remove('grid-view');
             videoContainer.classList.add('sidebar-view');
             viewToggleIcon.className = 'fas fa-th';
             viewToggleText.textContent = 'Grid View';
-            
-            // Remove navigation when switching to sidebar
-            const navigation = videoContainer.querySelector('.grid-navigation');
-            if (navigation) {
-              navigation.remove();
-            }
           }
           
           this.renderParticipants();
+        }
+
+        navigateGridSet(direction) {
+          const totalParticipants = this.participants.size;
+          const totalSets = Math.ceil(totalParticipants / this.maxParticipantsPerSet);
+          
+          this.currentGridSet += direction;
+          
+          if (this.currentGridSet < 0) {
+            this.currentGridSet = 0;
+          } else if (this.currentGridSet >= totalSets) {
+            this.currentGridSet = totalSets - 1;
+          }
+          
+          this.renderParticipants();
+          this.updateGridNavigation();
+        }
+
+        navigateSidebarSet(direction) {
+          const participantArray = Array.from(this.participants.values());
+          const sidebarParticipants = participantArray.filter(p => !p.isSpotlighted || this.currentView !== 'sidebar');
+          const totalSets = Math.ceil(sidebarParticipants.length / this.maxSidebarParticipants);
+          
+          this.currentSidebarSet += direction;
+          
+          if (this.currentSidebarSet < 0) {
+            this.currentSidebarSet = 0;
+          } else if (this.currentSidebarSet >= totalSets) {
+            this.currentSidebarSet = totalSets - 1;
+          }
+          
+          this.renderParticipants();
+        }
+
+        updateSidebarNavigation() {
+          const participantArray = Array.from(this.participants.values());
+          const sidebarParticipants = participantArray.filter(p => !p.isSpotlighted || this.currentView !== 'sidebar');
+          const totalSets = Math.ceil(sidebarParticipants.length / this.maxSidebarParticipants);
+          const sidebarNavigation = document.getElementById('sidebarNavigation');
+          const prevBtn = document.getElementById('prevSidebarBtn');
+          const nextBtn = document.getElementById('nextSidebarBtn');
+          const currentSidebarInfo = document.getElementById('currentSidebarInfo');
+          
+          if (this.currentView === 'sidebar' && totalSets > 1) {
+            sidebarNavigation.style.display = 'flex';
+            prevBtn.disabled = this.currentSidebarSet === 0;
+            nextBtn.disabled = this.currentSidebarSet === totalSets - 1;
+            currentSidebarInfo.textContent = `${this.currentSidebarSet + 1} of ${totalSets}`;
+          } else {
+            sidebarNavigation.style.display = 'none';
+          }
+        }
+
+        updateGridNavigation() {
+          const totalParticipants = this.participants.size;
+          const totalSets = Math.ceil(totalParticipants / this.maxParticipantsPerSet);
+          const gridNavigation = document.getElementById('gridNavigation');
+          const prevBtn = document.getElementById('prevSetBtn');
+          const nextBtn = document.getElementById('nextSetBtn');
+          const currentSetInfo = document.getElementById('currentSetInfo');
+          
+          if (this.currentView === 'grid' && totalSets > 1) {
+            gridNavigation.style.display = 'flex';
+            prevBtn.disabled = this.currentGridSet === 0;
+            nextBtn.disabled = this.currentGridSet === totalSets - 1;
+            currentSetInfo.textContent = `Set ${this.currentGridSet + 1} of ${totalSets}`;
+          } else {
+            gridNavigation.style.display = 'none';
+          }
         }
 
         async toggleMic(button) {
@@ -1426,6 +1467,24 @@ class WebRTCManager {
           setTimeout(() => this.updateTime(), 60000);
         }
 
+        showMeetingInfo() {
+          document.getElementById('displayMeetingId').textContent = this.meetingId;
+          document.getElementById('displayJoinUrl').textContent = `${window.location.origin}/join/${this.meetingId}`;
+          document.getElementById('meetingInfoModal').style.display = 'flex';
+        }
+
+        hideMeetingInfo() {
+          document.getElementById('meetingInfoModal').style.display = 'none';
+        }
+
+        copyToClipboard(text) {
+          navigator.clipboard.writeText(text).then(() => {
+            this.showToast('Copied to clipboard!');
+          }).catch(() => {
+            this.showToast('Failed to copy', 'error');
+          });
+        }
+
         showToast(message, type = 'success') {
           const toast = document.createElement('div');
           toast.className = `toast ${type === 'error' ? 'error' : type === 'info' ? 'info' : ''}`;
@@ -1440,8 +1499,8 @@ class WebRTCManager {
           }, 3000);
         }
 
-        leaveMeeting() {
-          if (confirm('Are you sure you want to leave the meeting?')) {
+        endMeeting() {
+          if (confirm('Are you sure you want to end the meeting for everyone?')) {
             this.socket.disconnect();
             window.location.href = '/dashboard';
           }
@@ -1455,104 +1514,41 @@ class WebRTCManager {
         });
       });
 
-      // Initialize the participant meeting
+      // Initialize the host meeting
       document.addEventListener('DOMContentLoaded', () => {
-        new ParticipantMeeting();
+        new HostMeeting();
       });
+    
       
-      // Method 1: Add console logging to the existing HostMeeting class
-      // Add this line in the constructor after meetingId is set:
-      console.log('Meeting ID:', this.meetingId);
-
-      // Method 2: Create a global function to access meeting ID
-      // Add this after the HostMeeting class definition:
-      window.getMeetingId = function() {
-        // Extract from URL (same logic as in the constructor)
-        const meetingId = window.location.pathname.split('/').pop();
-        console.log('Current Meeting ID:', meetingId);
-        return meetingId;
-      };
-
-      // Method 3: Store the meeting instance globally for console access
-      // Modify the DOMContentLoaded event listener:
-      document.addEventListener('DOMContentLoaded', () => {
-        window.hostMeeting = new HostMeeting();
-        console.log('Host Meeting initialized. Meeting ID:', window.hostMeeting.meetingId);
-      });
-
-      // Method 4: Add a dedicated console command function
-      window.showMeetingInfo = function() {
-        const meetingId = window.location.pathname.split('/').pop();
-        const joinUrl = `${window.location.origin}/join/${meetingId}`;
-        
-        console.group('📹 Meeting Information');
-        console.log('Meeting ID:', meetingId);
-        console.log('Join URL:', joinUrl);
-        console.log('Current URL:', window.location.href);
-        if (window.hostMeeting) {
-          console.log('Participants:', window.hostMeeting.participants.size);
-          console.log('Is Host:', window.hostMeeting.isHost);
-          console.log('User Name:', window.hostMeeting.userName);
-        }
-        console.groupEnd();
-        
-        return {
-          meetingId,
-          joinUrl,
-          currentUrl: window.location.href
-        };
-      };
-
-      // Method 5: Simple one-liner for immediate use
-      // You can run this directly in the browser console:
-      console.log('Meeting ID:', window.location.pathname.split('/').pop());
-
-      // Method 6: Enhanced version with error handling
-      window.getMeetingDetails = function() {
-        try {
-          const pathParts = window.location.pathname.split('/');
-          const meetingId = pathParts[pathParts.length - 1];
-          
-          if (!meetingId || meetingId === '') {
-            console.warn('No meeting ID found in URL');
-            return null;
-          }
-          
-          const details = {
-            meetingId: meetingId,
-            joinUrl: `${window.location.origin}/join/${meetingId}`,
-            hostUrl: window.location.href,
-            timestamp: new Date().toISOString()
-          };
-          
-          console.table(details);
-          return details;
-        } catch (error) {
-          console.error('Error getting meeting details:', error);
-          return null;
-        }
-      };
       
       // Make host name globally accessible
-      var myName = null;
-      window.myName = null;
+var myName = null;
+window.myName = null;
 
-      // Store global reference when meeting initializes  
-      window.addEventListener('load', function() {
-        setTimeout(() => {
-          // Try to find the host name from various sources
-          const participantItems = document.querySelectorAll('.participant-item');
-          for (let item of participantItems) {
-            const roleElement = item.querySelector('.role-badge');
-            if (roleElement && roleElement.textContent.includes('Host')) {
-              const nameElement = item.querySelector('.participant-name');
-              if (nameElement) {
-                myName = nameElement.textContent.trim();
-                window.myName = myName;
-                console.log('myName set to:', myName);
-                return;
-              }
-            }
-          }
-        }, 3000); // Wait 3 seconds for everything to load
-      });
+// Store global reference when meeting initializes  
+window.addEventListener('load', function() {
+  setTimeout(() => {
+    // Try to find the host name from various sources
+    const participantItems = document.querySelectorAll('.participant-item');
+    for (let item of participantItems) {
+      const roleElement = item.querySelector('.role-badge');
+      if (roleElement && roleElement.textContent.includes('Host')) {
+        const nameElement = item.querySelector('.participant-name');
+        if (nameElement) {
+          myName = nameElement.textContent.trim();
+          window.myName = myName;
+          console.log('myName set to:', myName);
+          return;
+        }
+      }
+    }
+  }, 3000); // Wait 3 seconds for everything to load
+});
+const hostParticipant = Array.from(window.hostMeetingInstance.participants.values())
+    .find(p => p.isHost);
+ 
+
+  const section = document.getElementById('secondaryVideosSection');
+  section.style.overflowX = 'hidden';
+  section.style.overflowY = 'hidden';
+
