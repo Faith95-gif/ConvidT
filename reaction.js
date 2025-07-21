@@ -367,6 +367,19 @@ class ReactionManager {
       }
     });
 
+    this.socket.on('hand-raising-denied', (data) => {
+      if (!this.isDestroyed) {
+        this.showToast(data.message, 'error');
+      }
+    });
+
+    this.socket.on('meeting-permissions-updated', (data) => {
+      if (!this.isDestroyed) {
+        // Update UI based on new permissions
+        this.updateHandRaisingButton(data.permissions.allowHandRaising);
+      }
+    });
+
     this.socket.on('participants-with-raised-hands', (data) => {
       if (!this.isDestroyed) {
         this.raisedHands.clear();
@@ -511,6 +524,24 @@ class ReactionManager {
     const raiseHandBtn = document.getElementById(`${this.namespace}raiseHandBtn`);
     if (!raiseHandBtn || this.isDestroyed) return;
     
+    // Check if hand raising is allowed
+    if (this.socket) {
+      this.socket.emit('check-hand-raising-permission', (response) => {
+        if (!response.allowed) {
+          this.showToast('The Host disabled raising hands', 'error');
+          return;
+        }
+        
+        // Proceed with raising hand if allowed
+        this.proceedWithRaiseHand(raiseHandBtn);
+      });
+    } else {
+      // Fallback if socket is not available
+      this.proceedWithRaiseHand(raiseHandBtn);
+    }
+  }
+
+  proceedWithRaiseHand(raiseHandBtn) {
     raiseHandBtn.setAttribute('data-active', 'true');
     raiseHandBtn.classList.add('rm-active');
 
@@ -549,6 +580,26 @@ class ReactionManager {
     }
 
     this.updateParticipantsDisplay();
+  }
+
+  updateHandRaisingButton(allowed) {
+    const raiseHandBtn = document.getElementById(`${this.namespace}raiseHandBtn`);
+    if (!raiseHandBtn || this.isDestroyed) return;
+    
+    if (!allowed) {
+      raiseHandBtn.style.opacity = '0.5';
+      raiseHandBtn.style.cursor = 'not-allowed';
+      raiseHandBtn.title = 'Hand raising is disabled by the host';
+      
+      // If hand is currently raised, lower it
+      if (raiseHandBtn.getAttribute('data-active') === 'true') {
+        this.lowerHand();
+      }
+    } else {
+      raiseHandBtn.style.opacity = '1';
+      raiseHandBtn.style.cursor = 'pointer';
+      raiseHandBtn.title = 'Raise Hand';
+    }
   }
 
   updateParticipantsDisplay() {
@@ -695,6 +746,8 @@ class ReactionManager {
       this.socket.off('reaction-received');
       this.socket.off('hand-raised');
       this.socket.off('hand-lowered');
+      this.socket.off('hand-raising-denied');
+      this.socket.off('meeting-permissions-updated');
       this.socket.off('participants-with-raised-hands');
     }
   }

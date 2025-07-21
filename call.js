@@ -703,7 +703,7 @@ export const setupSocketIO = (server) => {
 
       // Check if hand raising is enabled
       if (!meeting.canRaiseHand(socket.id)) {
-        socket.emit('action-error', { message: 'Hand raising is disabled by the host' });
+        socket.emit('hand-raising-denied', { message: 'The Host disabled raising hands' });
         return;
       }
 
@@ -1107,6 +1107,23 @@ export const setupSocketIO = (server) => {
       });
 
       console.log(`Host ${socket.id} ${muteAll ? 'muted' : 'unmuted'} all participants in meeting ${participantInfo.meetingId}`);
+    });
+
+    // New socket event for checking hand raising permission
+    socket.on('check-hand-raising-permission', (callback) => {
+      const participantInfo = participants.get(socket.id);
+      if (!participantInfo) {
+        callback({ allowed: false });
+        return;
+      }
+      
+      const meeting = meetings.get(participantInfo.meetingId);
+      if (!meeting) {
+        callback({ allowed: false });
+        return;
+      }
+
+      callback({ allowed: meeting.canRaiseHand(socket.id) });
     });
 
     socket.on('disconnect', () => {
